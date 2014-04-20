@@ -1,0 +1,241 @@
+package geoip
+
+import (
+	"bytes"
+	"compress/gzip"
+	"errors"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"net"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+var (
+	metaMarker            = []byte("\xab\xcd\xefMaxMind.com")
+	maxMetaSize           = 128 * 1024
+	errNoMetadata         = errors.New("can't find metadata - invalid mmdb file?")
+	errNo128Bits          = errors.New("128 bit values not supported yet")
+	errNoFormatMajor      = errors.New("binary_format_major_version not found in metadata")
+	errInvalidFormatMajor = errors.New("binary_format_major_version is not 2")
+	errInvalidDatabase    = errors.New("database seems to be corrupted")
+)
+
+type GeoIP struct {
+	tree         []byte
+	data         []byte
+	recordSize   int // bits
+	recordBytes  int // bytes rounded to int
+	nodeSize     int // bytes
+	nodeSizeEven bool
+	recordShift  uint // = recordSize - (recordBytes * 8)
+	nodeCount    int
+	meta         map[string]interface{}
+}
+
+func (g *GeoIP) Updated() time.Time {
+	if t, ok := g.meta["build_epoch"].(uint64); ok {
+		return time.Unix(int64(t), 0)
+	}
+	return time.Time{}
+}
+
+func (g *GeoIP) Lookup(addr string) (*Record, error) {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		// Try a CIDR
+		ip, _, _ = net.ParseCIDR(addr)
+		if ip == nil {
+			return nil, fmt.Errorf("%q is not a valid IPv4 nor IPv6 address", addr)
+		}
+	}
+	return g.LookupIP(ip)
+}
+
+func (g *GeoIP) LookupIP(ip net.IP) (*Record, error) {
+	data := []byte(ip)
+	return g.lookupData(ip.String(), data)
+}
+
+func (g *GeoIP) lookupData(addr string, data []byte) (*Record, error) {
+	node := 0
+	ii := 0
+	for len(data) > 0 {
+		b := data[0]
+		next := g.decodeNode(node, b&0x80 != 0)
+		if next == g.nodeCount {
+			// Not found
+			return nil, fmt.Errorf("address %s not found", addr)
+		}
+		if next > g.nodeCount {
+			// Found data
+			return g.lookupResult(next)
+		}
+		// next < g.nodeCount, keep iterating
+		node = next
+		ii++
+		data[0] = b << 1
+		if ii == 8 {
+			ii = 0
+			data = data[1:]
+		}
+	}
+	panic("unreachable")
+}
+
+func (g *GeoIP) decodeNode(node int, right bool) int {
+	data := g.tree[g.nodeSize*node:]
+	if g.nodeSizeEven {
+		// Format for e.g. 6 bytes
+		// | <------------- node --------------->|
+		// | 23 .. 0          |          23 .. 0 |
+		if right {
+			data = data[g.recordBytes:]
+		}
+		return int(decodeUint64(data, g.recordBytes))
+	}
+	// Format for e.g. 7 bytes
+	// | <------------- node --------------->|
+	// | 23 .. 0 | 27..24 | 27..24 | 23 .. 0 |
+	if right {
+		// Decode value except the most significant nibble
+		val := decodeUint64(data[g.recordBytes+1:], g.recordBytes)
+		// MSN is the second nibble in the byte just before
+		// the decoded ones.
+		val = val | uint64(data[g.recordBytes]&0x0F)<<g.recordShift
+		return int(val)
+	}
+	// Decode value except the most significant nibble
+	val := decodeUint64(data, g.recordBytes)
+	// Add nibble just after the decoded data as the MSB
+	val = val | uint64(data[g.recordBytes]>>4)<<g.recordShift
+	return int(val)
+}
+
+func (g *GeoIP) lookupResult(p int) (*Record, error) {
+	offset := p - g.nodeCount - 16
+	dec := &decoder{g.data, offset}
+	val, err := dec.decode()
+	if err != nil {
+		return nil, err
+	}
+	return newRecord(val)
+}
+
+func New(r io.ReadSeeker) (*GeoIP, error) {
+	return newGeoIP(r)
+}
+
+func Open(filename string) (*GeoIP, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if filepath.Ext(filename) == ".gz" {
+		r, err := gzip.NewReader(f)
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+		data, err := ioutil.ReadAll(r)
+		if err != nil {
+			return nil, err
+		}
+		return New(bytes.NewReader(data))
+	}
+	return New(f)
+}
+
+func newGeoIP(r io.ReadSeeker) (g *GeoIP, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			if e, ok := rec.(error); ok {
+				err = e
+			} else {
+				err = errInvalidDatabase
+			}
+		}
+	}()
+	// Seek to the end to find the total size
+	total, err := r.Seek(0, os.SEEK_END)
+	if err != nil {
+		return nil, err
+	}
+	// Seek to the maximum position where the
+	// metadata might start, so we only read 128K
+	// initially. Ignore any errors since the data
+	// might be smaller than 128K and still be valid.
+	r.Seek(-int64(maxMetaSize), os.SEEK_END)
+	end, err := ioutil.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	metaData, err := findMetadata(end)
+	if err != nil {
+		return nil, err
+	}
+	dec := &decoder{data: metaData}
+	metaVal, err := dec.decode()
+	if err != nil {
+		return nil, err
+	}
+	meta, ok := metaVal.(map[string]interface{})
+	if !ok {
+		return nil, errInvalidDatabase
+	}
+	major, ok := meta["binary_format_major_version"].(uint16)
+	if !ok {
+		return nil, errNoFormatMajor
+	}
+	if major != 2 {
+		return nil, errInvalidFormatMajor
+	}
+	if _, err := r.Seek(0, os.SEEK_SET); err != nil {
+		return nil, err
+	}
+	recordSize := int(meta["record_size"].(uint16))
+	nodeCount := int(meta["node_count"].(uint32))
+	// Read tree
+	nodeSize := recordSize * 2 / 8
+	treeSize := nodeSize * nodeCount
+	tree := make([]byte, treeSize)
+	if _, err := io.ReadFull(r, tree); err != nil {
+		return nil, err
+	}
+	// Discard 16 null bytes after tree
+	if _, err := io.CopyN(ioutil.Discard, r, 16); err != nil {
+		return nil, err
+	}
+	// Read the data
+	data := make([]byte, int(total)-(treeSize+16+len(metaData)+len(metaMarker)))
+	if _, err := io.ReadFull(r, data); err != nil {
+		return nil, err
+	}
+	recordBytes := recordSize / 8
+	return &GeoIP{
+		tree:         tree,
+		data:         data,
+		recordSize:   recordSize,
+		recordBytes:  recordBytes,
+		nodeSize:     nodeSize,
+		nodeSizeEven: nodeSize%2 == 0,
+		recordShift:  uint(recordSize - recordBytes*8),
+		nodeCount:    nodeCount,
+		meta:         meta,
+	}, nil
+}
+
+func findMetadata(data []byte) ([]byte, error) {
+	if total := len(data); total > maxMetaSize {
+		data = data[total-maxMetaSize:]
+	}
+	p := bytes.LastIndex(data, metaMarker)
+	if p == -1 {
+		return nil, errNoMetadata
+	}
+	p += len(metaMarker)
+	return data[p:], nil
+}
