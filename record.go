@@ -69,8 +69,9 @@ func newPlace(val interface{}) *Place {
 				break
 			}
 		}
-		name := make(Name)
+		var name Name
 		if names, ok := m["names"].(map[string]interface{}); ok {
+			name = make(Name, len(names))
 			for k, v := range names {
 				if n, ok := v.(string); ok {
 					name[k] = n
