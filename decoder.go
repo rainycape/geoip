@@ -3,6 +3,7 @@ package geoip
 import (
 	"fmt"
 	"math"
+	"math/big"
 )
 
 // For the MMDB format, see http://maxmind.github.io/MaxMind-DB/
@@ -76,6 +77,10 @@ func decodeUint32(data []byte, size int) uint32 {
 	return val
 }
 
+func decodeInt32(data []byte, size int) int32 {
+	return int32(decodeUint32(data, size))
+}
+
 func decodeUint64(data []byte, size int) uint64 {
 	val := uint64(0)
 	for ii := 0; ii < size; ii++ {
@@ -84,17 +89,28 @@ func decodeUint64(data []byte, size int) uint64 {
 	return val
 }
 
+func decodeUint128(data []byte, size int) *big.Int {
+	n := new(big.Int)
+	return n.SetBytes(data)
+}
+
 type decoder struct {
 	data []byte
 	at   int
 }
 
-func (d *decoder) curData() []byte {
-	return d.data[d.at:]
+func (d *decoder) curData() ([]byte, error) {
+	if d.at > len(d.data) {
+		return nil, fmt.Errorf("invalid data pointer %d - corrupted database?", d.at)
+	}
+	return d.data[d.at:], nil
 }
 
-func (d *decoder) decodeType() (valueType, int) {
-	cur := d.curData()
+func (d *decoder) decodeType() (valueType, int, error) {
+	cur, err := d.curData()
+	if err != nil {
+		return 0, 0, err
+	}
 	t, extended := decodeType(cur)
 	var size, offset int
 	if t == typePointer {
@@ -117,13 +133,18 @@ func (d *decoder) decodeType() (valueType, int) {
 		size, offset = decodeSize(cur, extended)
 	}
 	d.at += offset
-	return t, size
+	return t, size, nil
 }
 
 func (d *decoder) decode() (interface{}, error) {
-	t, size := d.decodeType()
-	cur := d.curData()
-	var err error
+	t, size, err := d.decodeType()
+	if err != nil {
+		return nil, err
+	}
+	cur, err := d.curData()
+	if err != nil {
+		return nil, err
+	}
 	switch t {
 	case typePointer:
 		dec := &decoder{d.data, size}
@@ -139,40 +160,54 @@ func (d *decoder) decode() (interface{}, error) {
 		d.at += size
 		b := decodeUint64(cur, 8)
 		return math.Float64frombits(b), nil
+	case typeBytes:
+		d.at += size
+		// Return a copy, we don't want callers
+		// alterting our internal data block
+		b := make([]byte, size)
+		copy(b, cur)
+		return b, nil
 	case typeUint16:
 		if size > 2 {
-			err = fmt.Errorf("size %d is too big this uint16", size)
+			err = fmt.Errorf("size %d is too big for uint16", size)
 			break
 		}
 		d.at += size
 		return decodeUint16(cur, size), nil
 	case typeUint32:
 		if size > 4 {
-			err = fmt.Errorf("size %d is too big this uint32", size)
+			err = fmt.Errorf("size %d is too big for uint32", size)
 			break
 		}
 		d.at += size
 		return decodeUint32(cur, size), nil
 	case typeMap:
 		return d.decodeMap(size)
+	case typeInt32:
+		if size > 4 {
+			err = fmt.Errorf("size %d is too big for int32", size)
+			break
+		}
+		d.at += size
+		return decodeInt32(cur, size), nil
 	case typeUint64:
 		if size > 8 {
-			err = fmt.Errorf("size %d is too big this uint64", size)
+			err = fmt.Errorf("size %d is too big for uint64", size)
 			break
 		}
 		d.at += size
 		return decodeUint64(cur, size), nil
 	case typeUint128:
 		if size > 16 {
-			err = fmt.Errorf("size %d is too big this uint128", size)
-			break
-		}
-		if size > 8 {
-			err = errNo128Bits
+			err = fmt.Errorf("size %d is too big for uint128", size)
 			break
 		}
 		d.at += size
-		return decodeUint64(cur, size), nil
+		if size <= 8 {
+			return decodeUint64(cur, size), nil
+			break
+		}
+		return decodeUint128(cur, size), nil
 	case typeArray:
 		return d.decodeArray(size)
 	case typeBoolean:

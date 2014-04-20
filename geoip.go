@@ -17,15 +17,17 @@ var (
 	metaMarker            = []byte("\xab\xcd\xefMaxMind.com")
 	maxMetaSize           = 128 * 1024
 	errNoMetadata         = errors.New("can't find metadata - invalid mmdb file?")
-	errNo128Bits          = errors.New("128 bit values not supported yet")
 	errNoFormatMajor      = errors.New("binary_format_major_version not found in metadata")
 	errInvalidFormatMajor = errors.New("binary_format_major_version is not 2")
+	errNoIPVersion        = errors.New("missing IP version")
 	errInvalidDatabase    = errors.New("database seems to be corrupted")
+	errInvalidIP          = errors.New("invalid IP")
 )
 
 type GeoIP struct {
 	tree         []byte
 	data         []byte
+	ipVersion    int
 	recordSize   int // bits
 	recordBytes  int // bytes rounded to int
 	nodeSize     int // bytes
@@ -35,6 +37,10 @@ type GeoIP struct {
 	meta         map[string]interface{}
 }
 
+func (g *GeoIP) IPVersion() int {
+	return g.ipVersion
+}
+
 func (g *GeoIP) Updated() time.Time {
 	if t, ok := g.meta["build_epoch"].(uint64); ok {
 		return time.Unix(int64(t), 0)
@@ -42,7 +48,7 @@ func (g *GeoIP) Updated() time.Time {
 	return time.Time{}
 }
 
-func (g *GeoIP) Lookup(addr string) (*Record, error) {
+func (g *GeoIP) parseIP(addr string) (net.IP, error) {
 	ip := net.ParseIP(addr)
 	if ip == nil {
 		// Try a CIDR
@@ -51,19 +57,48 @@ func (g *GeoIP) Lookup(addr string) (*Record, error) {
 			return nil, fmt.Errorf("%q is not a valid IPv4 nor IPv6 address", addr)
 		}
 	}
+	return ip, nil
+}
+
+func (g *GeoIP) Lookup(addr string) (*Record, error) {
+	ip, err := g.parseIP(addr)
+	if err != nil {
+		return nil, err
+	}
 	return g.LookupIP(ip)
 }
 
 func (g *GeoIP) LookupIP(ip net.IP) (*Record, error) {
+	res, err := g.LookupIPValue(ip)
+	if err != nil {
+		return nil, err
+	}
+	return g.resultToRecord(res)
+}
+
+func (g *GeoIP) LookupIPValue(ip net.IP) (interface{}, error) {
+	if len(ip) == 0 {
+		return nil, errInvalidIP
+	}
+	ipv4 := ip.To4()
+	if ipv4 != nil {
+		if g.ipVersion == 4 {
+			ip = ipv4
+		}
+	} else {
+		if g.ipVersion == 4 {
+			return nil, fmt.Errorf("can't look up IPv6 %s, database is IPv4", ip.String())
+		}
+	}
 	data := []byte(ip)
 	return g.lookupData(ip.String(), data)
 }
 
-func (g *GeoIP) lookupData(addr string, data []byte) (*Record, error) {
+func (g *GeoIP) lookupData(addr string, data []byte) (interface{}, error) {
 	node := 0
 	ii := 0
-	for len(data) > 0 {
-		b := data[0]
+	b := data[0]
+	for {
 		next := g.decodeNode(node, b&0x80 != 0)
 		if next == g.nodeCount {
 			// Not found
@@ -76,10 +111,14 @@ func (g *GeoIP) lookupData(addr string, data []byte) (*Record, error) {
 		// next < g.nodeCount, keep iterating
 		node = next
 		ii++
-		data[0] = b << 1
+		b = b << 1
 		if ii == 8 {
 			ii = 0
 			data = data[1:]
+			if len(data) == 0 {
+				break
+			}
+			b = data[0]
 		}
 	}
 	panic("unreachable")
@@ -114,13 +153,13 @@ func (g *GeoIP) decodeNode(node int, right bool) int {
 	return int(val)
 }
 
-func (g *GeoIP) lookupResult(p int) (*Record, error) {
+func (g *GeoIP) lookupResult(p int) (interface{}, error) {
 	offset := p - g.nodeCount - 16
 	dec := &decoder{g.data, offset}
-	val, err := dec.decode()
-	if err != nil {
-		return nil, err
-	}
+	return dec.decode()
+}
+
+func (g *GeoIP) resultToRecord(val interface{}) (*Record, error) {
 	return newRecord(val)
 }
 
@@ -166,9 +205,13 @@ func newGeoIP(r io.ReadSeeker) (g *GeoIP, err error) {
 	}
 	// Seek to the maximum position where the
 	// metadata might start, so we only read 128K
-	// initially. Ignore any errors since the data
-	// might be smaller than 128K and still be valid.
-	r.Seek(-int64(maxMetaSize), os.SEEK_END)
+	// initially.
+	if _, err := r.Seek(-int64(maxMetaSize), os.SEEK_END); err != nil {
+		// File might be smaller than maxMetaSize, seek to start
+		if _, err := r.Seek(0, os.SEEK_SET); err != nil {
+			return nil, err
+		}
+	}
 	end, err := ioutil.ReadAll(r)
 	if err != nil {
 		return nil, err
@@ -192,6 +235,13 @@ func newGeoIP(r io.ReadSeeker) (g *GeoIP, err error) {
 	}
 	if major != 2 {
 		return nil, errInvalidFormatMajor
+	}
+	ipVersion, ok := meta["ip_version"].(uint16)
+	if !ok {
+		return nil, errNoIPVersion
+	}
+	if ipVersion != 4 && ipVersion != 6 {
+		return nil, fmt.Errorf("invalid IP version %d", ipVersion)
 	}
 	if _, err := r.Seek(0, os.SEEK_SET); err != nil {
 		return nil, err
@@ -218,6 +268,7 @@ func newGeoIP(r io.ReadSeeker) (g *GeoIP, err error) {
 	return &GeoIP{
 		tree:         tree,
 		data:         data,
+		ipVersion:    int(ipVersion),
 		recordSize:   recordSize,
 		recordBytes:  recordBytes,
 		nodeSize:     nodeSize,
