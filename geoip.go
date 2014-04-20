@@ -101,6 +101,7 @@ func (g *GeoIP) LookupIPValue(ip net.IP) (interface{}, error) {
 
 func (g *GeoIP) lookupData(ip net.IP, data []byte, node int) (interface{}, error) {
 	ii := 0
+	bit := 0
 	b := data[0]
 	for {
 		next := g.decodeNode(node, b&0x80 != 0)
@@ -114,15 +115,15 @@ func (g *GeoIP) lookupData(ip net.IP, data []byte, node int) (interface{}, error
 		}
 		// next < g.nodeCount, keep iterating
 		node = next
-		ii++
+		bit++
 		b = b << 1
-		if ii == 8 {
-			ii = 0
-			data = data[1:]
-			if len(data) == 0 {
+		if bit == 8 {
+			bit = 0
+			ii++
+			if len(data) == ii {
 				break
 			}
-			b = data[0]
+			b = data[ii]
 		}
 	}
 	return node, errNoMoreIP
