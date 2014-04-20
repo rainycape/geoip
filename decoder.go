@@ -118,20 +118,22 @@ func (d *decoder) decodeType() (valueType, int, error) {
 		base := int(cur[0])
 		ss := (base >> 3) & 0x03
 		vvv := base & 0x07
-		offset = 2 + ss
-		switch ss {
-		case 0:
-			size = vvv<<8 | int(cur[1])
-		case 1:
-			size = (vvv<<16 | int(cur[1])<<8 | int(cur[2])) + 2048
-		case 2:
-			size = (vvv<<24 | int(cur[1])<<16 | int(cur[2])<<8 | int(cur[3])) + 526336
-		case 3:
-			size = int(cur[1])<<24 | int(cur[2])<<16 | int(cur[3])<<8 | int(cur[4])
+		d.at += 2 + ss
+		if ss == 0 {
+			return t, vvv<<8 | int(cur[1]), nil
 		}
-	} else {
-		size, offset = decodeSize(cur, extended)
+		if ss == 1 {
+			return t, (vvv<<16 | int(cur[1])<<8 | int(cur[2])) + 2048, nil
+		}
+		if ss == 2 {
+			return t, (vvv<<24 | int(cur[1])<<16 | int(cur[2])<<8 | int(cur[3])) + 526336, nil
+		}
+		if ss == 3 {
+			return t, int(cur[1])<<24 | int(cur[2])<<16 | int(cur[3])<<8 | int(cur[4]), nil
+		}
+		panic("unreachable")
 	}
+	size, offset = decodeSize(cur, extended)
 	d.at += offset
 	return t, size, nil
 }
@@ -228,33 +230,48 @@ func (d *decoder) decode() (interface{}, error) {
 }
 
 func (d *decoder) decodeArray(count int) ([]interface{}, error) {
-	var values []interface{}
+	values := make([]interface{}, count)
 	for ii := 0; ii < count; ii++ {
 		v, err := d.decode()
 		if err != nil {
 			return nil, err
 		}
-		values = append(values, v)
+		values[ii] = v
 	}
 	return values, nil
 }
 
+// fast path for decoding strings from decodeMap
+func (d *decoder) decodeString() (string, error) {
+	t, size, err := d.decodeType()
+	if err != nil {
+		return "", err
+	}
+	if t == typePointer {
+		dec := &decoder{d.data, size}
+		return dec.decodeString()
+	}
+	if t != typeString {
+		return "", fmt.Errorf("type %d is not string", t)
+	}
+	end := d.at + size
+	s := makeString(d.data[d.at:end])
+	d.at = end
+	return s, nil
+}
+
 func (d *decoder) decodeMap(count int) (map[string]interface{}, error) {
-	m := make(map[string]interface{})
+	m := make(map[string]interface{}, count)
 	for ii := 0; ii < count; ii++ {
-		key, err := d.decode()
+		key, err := d.decodeString()
 		if err != nil {
 			return nil, err
-		}
-		ks, ok := key.(string)
-		if !ok {
-			return nil, fmt.Errorf("non-string map key %T", key)
 		}
 		value, err := d.decode()
 		if err != nil {
 			return nil, err
 		}
-		m[ks] = value
+		m[key] = value
 	}
 	return m, nil
 }
