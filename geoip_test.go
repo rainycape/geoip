@@ -150,17 +150,14 @@ func TestTestDatabases(t *testing.T) {
 }
 
 func testIPv4(t testing.TB, g *GeoIP, name string) {
-	fmt.Println("DB", name)
 	for ii := 1; ii < 36; ii++ {
 		address := fmt.Sprintf("1.1.1.%d", ii)
 		ip := net.ParseIP(address)
 		res, err := g.LookupIPValue(ip)
 		expected := expectedValue(ip, name)
 		if expected == nil {
-			fmt.Println("IP", ip, "ERR", err)
 			if err == nil {
 				t.Errorf("expecting an error for IP %s in DB %s", ip, name)
-				fmt.Printf("%s %v %v %T %v\n", ip, err, res, res, expected)
 			}
 		} else {
 			if err != nil {
@@ -175,6 +172,31 @@ func testIPv4(t testing.TB, g *GeoIP, name string) {
 }
 
 func testIPv6(t testing.TB, g *GeoIP, name string) {
+	addrs := []string{
+		"::1:ffff:ffff",
+		"::2:0:0",
+		"::2:0:40",
+		"::2:0:50",
+		"::2:0:58",
+	}
+	for _, v := range addrs {
+		ip := net.ParseIP(v)
+		res, err := g.LookupIPValue(ip)
+		expected := expectedValue(ip, name)
+		if expected == nil {
+			if err == nil {
+				t.Errorf("expecting an error for IP %s in DB %s", ip, name)
+			}
+		} else {
+			if err != nil {
+				t.Error(err)
+			} else {
+				if !deepEqual(t, res, expected) {
+					t.Errorf("expecting %v for IP %s in DB %s, got %v instead", expected, ip, name, res)
+				}
+			}
+		}
+	}
 }
 
 func deepEqual(t testing.TB, a interface{}, b interface{}) bool {
@@ -243,6 +265,11 @@ func expectedValue(ip net.IP, name string) interface{} {
 			}
 			return map[string]interface{}{"ip": prev2Power(ip)}
 		}
+	case "MaxMind-DB-test-ipv6-24.mmdb", "MaxMind-DB-test-ipv6-28.mmdb", "MaxMind-DB-test-ipv6-32.mmdb":
+		if ip.To4() != nil {
+			return nil
+		}
+		return map[string]interface{}{"ip": ip.String()}
 	case "MaxMind-DB-test-mixed-24.mmdb", "MaxMind-DB-test-mixed-28.mmdb", "MaxMind-DB-test-mixed-32.mmdb":
 		if v4 := ip.To4(); v4 != nil {
 			if v4[3] > 32 {
@@ -250,7 +277,11 @@ func expectedValue(ip net.IP, name string) interface{} {
 			}
 			return map[string]interface{}{"ip": "::" + prev2Power(ip)}
 		}
+		return map[string]interface{}{"ip": ip.String()}
 	case "MaxMind-DB-test-nested.mmdb":
+		if ip.To4() == nil {
+			return nil
+		}
 		return map[string]interface{}{
 			"map1": map[string]interface{}{
 				"map2": map[string]interface{}{
@@ -267,6 +298,9 @@ func expectedValue(ip net.IP, name string) interface{} {
 			},
 		}
 	case "MaxMind-DB-test-decoder.mmdb":
+		if ip.To4() == nil {
+			return nil
+		}
 		return map[string]interface{}{
 			"boolean": true,
 			"float":   float32(1.1),
@@ -291,7 +325,7 @@ func expectedValue(ip net.IP, name string) interface{} {
 }
 
 func TestOpenGz(t *testing.T) {
-	const file = "GeoLite2-City.mmdb.gz"
+	file := filepath.Join("testdata", "GeoIP2-City-Test.mmdb.gz")
 	_, err := Open(file)
 	if err != nil {
 		if os.IsNotExist(err) {
