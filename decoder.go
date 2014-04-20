@@ -151,7 +151,7 @@ func (d *decoder) decode() (interface{}, error) {
 		return dec.decode()
 	case typeString:
 		d.at += size
-		return string(cur[:size]), nil
+		return makeString(cur[:size]), nil
 	case typeDouble:
 		if size != 8 {
 			err = fmt.Errorf("double must 8 bytes, not %d", size)

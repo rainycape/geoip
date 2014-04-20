@@ -22,12 +22,15 @@ var (
 	errNoIPVersion        = errors.New("missing IP version")
 	errInvalidDatabase    = errors.New("database seems to be corrupted")
 	errInvalidIP          = errors.New("invalid IP")
+	errNoMoreIP           = errors.New("finished looking at the IP addr without finding a match")
+	v4InV6Prefix          = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff}
 )
 
 type GeoIP struct {
 	tree         []byte
 	data         []byte
 	ipVersion    int
+	ipv4Start    int
 	recordSize   int // bits
 	recordBytes  int // bytes rounded to int
 	nodeSize     int // bytes
@@ -80,10 +83,12 @@ func (g *GeoIP) LookupIPValue(ip net.IP) (interface{}, error) {
 	if len(ip) == 0 {
 		return nil, errInvalidIP
 	}
+	start := 0
 	ipv4 := ip.To4()
 	if ipv4 != nil {
-		if g.ipVersion == 4 {
+		if g.ipVersion == 4 || g.ipv4Start > 0 {
 			ip = ipv4
+			start = g.ipv4Start
 		}
 	} else {
 		if g.ipVersion == 4 {
@@ -91,18 +96,17 @@ func (g *GeoIP) LookupIPValue(ip net.IP) (interface{}, error) {
 		}
 	}
 	data := []byte(ip)
-	return g.lookupData(ip.String(), data)
+	return g.lookupData(ip, data, start)
 }
 
-func (g *GeoIP) lookupData(addr string, data []byte) (interface{}, error) {
-	node := 0
+func (g *GeoIP) lookupData(ip net.IP, data []byte, node int) (interface{}, error) {
 	ii := 0
 	b := data[0]
 	for {
 		next := g.decodeNode(node, b&0x80 != 0)
 		if next == g.nodeCount {
 			// Not found
-			return nil, fmt.Errorf("address %s not found", addr)
+			return nil, fmt.Errorf("address %s not found", ip)
 		}
 		if next > g.nodeCount {
 			// Found data
@@ -121,7 +125,7 @@ func (g *GeoIP) lookupData(addr string, data []byte) (interface{}, error) {
 			b = data[0]
 		}
 	}
-	panic("unreachable")
+	return node, errNoMoreIP
 }
 
 func (g *GeoIP) decodeNode(node int, right bool) int {
@@ -265,7 +269,7 @@ func newGeoIP(r io.ReadSeeker) (g *GeoIP, err error) {
 		return nil, err
 	}
 	recordBytes := recordSize / 8
-	return &GeoIP{
+	geo := &GeoIP{
 		tree:         tree,
 		data:         data,
 		ipVersion:    int(ipVersion),
@@ -276,7 +280,16 @@ func newGeoIP(r io.ReadSeeker) (g *GeoIP, err error) {
 		recordShift:  uint(recordSize - recordBytes*8),
 		nodeCount:    nodeCount,
 		meta:         meta,
-	}, nil
+	}
+	if ipVersion == 6 {
+		s, err := geo.lookupData(nil, v4InV6Prefix, 0)
+		if err == errNoMoreIP {
+			if i, ok := s.(int); ok {
+				geo.ipv4Start = i
+			}
+		}
+	}
+	return geo, nil
 }
 
 func findMetadata(data []byte) ([]byte, error) {
