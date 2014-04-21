@@ -8,16 +8,21 @@ var (
 	codes = []string{"iso_code", "code"}
 )
 
+// Name represents a name with multiple localized names.
 type Name map[string]string
 
 func (n Name) String() string {
 	return n["en"]
 }
 
+// LocalizedName returns the name in the given language, or
+// the empty string if the name lacks that translation.
 func (n Name) LocalizedName(lang string) string {
 	return n[lang]
 }
 
+// Localizations returns the available localizations for
+// this name.
 func (n Name) Localizations() []string {
 	keys := make([]string, 0, len(n))
 	for k := range n {
@@ -26,32 +31,84 @@ func (n Name) Localizations() []string {
 	return keys
 }
 
+// Place represents a place with a Code, a GeonameID
+// (see http://www.geonames.org for more information), and a Name.
+// Code and GeonameID might be empty, but Name will always have at
+// least a value.
 type Place struct {
-	Code      string
+	// Code is the given code for the place. For continents, this
+	// value is one of AF (Africa), AS (Asia), EU (Europe), OC (Oceania),
+	// NA (North America) and SA (South America). For countries, its
+	// their ISO 3166-1 2 letter code (see http://en.wikipedia.org/wiki/ISO_3166-1).
+	Code string
+	// GeonameID is the place's ID in the geonames database. See
+	// http://www.geonames.org for more information.
 	GeonameID int
-	Name      Name
+	// Name is the place name, usually with several translations.
+	Name Name
 }
 
 func (p *Place) String() string {
 	return p.Name.String()
 }
 
+// Record hold the information returned for a given
+// IP address. See the comments on each field for more
+// information.
 type Record struct {
-	Continent           *Place
-	Country             *Place
-	RegisteredCountry   *Place
-	RepresentedCountry  *Place
-	City                *Place
-	Subdivisions        []*Place
-	Latitude            float64
-	Longitude           float64
-	MetroCode           string
-	PostalCode          string
-	TimeZone            string
-	IsAnonymousProxy    bool
+	// Continent contains information about the continent
+	// where the record is located.
+	Continent *Place
+	// Country contains information about the country
+	// where the record is located.
+	Country *Place
+	// RegisteredCountry contains information about the
+	// country where the ISP has registered the IP address
+	// for this record. Note that this field might be
+	// different from Country.
+	RegisteredCountry *Place
+	// RepresentedCountry is non nil only when the record
+	// belongs an entity representing a country, like an
+	// embassy or a military base. Note that it might be
+	// diferrent from Country.
+	RepresentedCountry *Place
+	// City contains information about the city where the
+	// record is located.
+	City *Place
+	// Subdivisions contains details about the subdivisions
+	// of the country where the record is located. Subdivisions
+	// are arranged from largest to smallest and the number of
+	// them will vary depending on the country.
+	Subdivisions []*Place
+	// Latitude of the location associated with the record.
+	// Note that a 0 Latitude and a 0 Longitude means the
+	// coordinates are not known.
+	Latitude float64
+	// Longitude of the location associated with the record.
+	// Note that a 0 Latitude and a 0 Longitude means the
+	// coordinates are not known.
+	Longitude float64
+	// MetroCode contains the metro code associated with the
+	// record. These are only available in the US
+	MetroCode int
+	// PostalCode associated with the record. These are available in
+	// AU, CA, FR, DE, IT, ES, CH, UK and US.
+	PostalCode string
+	// TimeZone associated with the record, in IANA format (e.g.
+	// America/New_York). See http://www.iana.org/time-zones.
+	TimeZone string
+	// IsAnonymousProxy is true iff the record belongs
+	// to an anonymous proxy.
+	IsAnonymousProxy bool
+	// IsSatelliteProvider is true iff the record is
+	// in a block managed by a satellite ISP that provides
+	// service to multiple countries. These IPs might be
+	// in high risk countries.
 	IsSatelliteProvider bool
 }
 
+// CountryCode is a shorthand for r.Country.Code, but returns
+// the empty string if r.Country is nil.
 func (r *Record) CountryCode() string {
 	if r != nil && r.Country != nil {
 		return r.Country.Code
@@ -93,13 +150,14 @@ func newRecord(val interface{}) (*Record, error) {
 		return nil, fmt.Errorf("invalid record type %T", val)
 	}
 	var latitude, longitude float64
-	var metroCode, postalCode, timeZone string
+	var postalCode, timeZone string
+	var metroCode int
 	var isAnonymousProxy, isSatelliteProvider bool
 	if location, ok := m["location"].(map[string]interface{}); ok {
 		latitude, _ = location["latitude"].(float64)
 		longitude, _ = location["longitude"].(float64)
 		if m := location["metro_code"]; m != nil {
-			metroCode = fmt.Sprintf("%v", m)
+			metroCode = int(m.(uint16))
 		}
 		timeZone, _ = location["time_zone"].(string)
 	}

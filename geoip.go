@@ -26,6 +26,12 @@ var (
 	v4InV6Prefix          = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff}
 )
 
+// GeoIP represents an in-memory database which maps IP addresses,
+// either IPv4 or IPv6, to geographical information. You shouldn't
+// create multiple GeoIP instances. Instead, create only one and
+// share it among the different parts of your application. All
+// methods are safe to access from multiple goroutines concurrently.
+// Use New or Open to initialize a GeoIP.
 type GeoIP struct {
 	tree         []byte
 	data         []byte
@@ -40,10 +46,13 @@ type GeoIP struct {
 	meta         map[string]interface{}
 }
 
+// IPVersion returns the IP version the loaded database provides, either
+// 4 or 6.
 func (g *GeoIP) IPVersion() int {
 	return g.ipVersion
 }
 
+// Updated returns the date when the loaded database was built.
 func (g *GeoIP) Updated() time.Time {
 	if t, ok := g.meta["build_epoch"].(uint64); ok {
 		return time.Unix(int64(t), 0)
@@ -51,18 +60,9 @@ func (g *GeoIP) Updated() time.Time {
 	return time.Time{}
 }
 
-func (g *GeoIP) parseIP(addr string) (net.IP, error) {
-	ip := net.ParseIP(addr)
-	if ip == nil {
-		// Try a CIDR
-		ip, _, _ = net.ParseCIDR(addr)
-		if ip == nil {
-			return nil, fmt.Errorf("%q is not a valid IPv4 nor IPv6 address", addr)
-		}
-	}
-	return ip, nil
-}
-
+// Lookup returns the geographical information for the given
+// IP address. Note that addr can be an IP address or a CIDR.
+// Both IPv4 and IPv6 are supported by this method.
 func (g *GeoIP) Lookup(addr string) (*Record, error) {
 	ip, err := g.parseIP(addr)
 	if err != nil {
@@ -71,6 +71,8 @@ func (g *GeoIP) Lookup(addr string) (*Record, error) {
 	return g.LookupIP(ip)
 }
 
+// LookupIP works like Lookup, but accepts a net.IP rather
+// than the address as a string.
 func (g *GeoIP) LookupIP(ip net.IP) (*Record, error) {
 	res, err := g.LookupIPValue(ip)
 	if err != nil {
@@ -79,6 +81,9 @@ func (g *GeoIP) LookupIP(ip net.IP) (*Record, error) {
 	return g.resultToRecord(res)
 }
 
+// LookupIPValue returns the raw value found in the database
+// for the given IP. Note that the type of value might vary
+// depending on the IP, but will usually be a map[string]interface{}.
 func (g *GeoIP) LookupIPValue(ip net.IP) (interface{}, error) {
 	if len(ip) == 0 {
 		return nil, errInvalidIP
@@ -97,6 +102,18 @@ func (g *GeoIP) LookupIPValue(ip net.IP) (interface{}, error) {
 	}
 	data := []byte(ip)
 	return g.lookupData(ip, data, start)
+}
+
+func (g *GeoIP) parseIP(addr string) (net.IP, error) {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		// Try a CIDR
+		ip, _, _ = net.ParseCIDR(addr)
+		if ip == nil {
+			return nil, fmt.Errorf("%q is not a valid IPv4 nor IPv6 address", addr)
+		}
+	}
+	return ip, nil
 }
 
 func (g *GeoIP) lookupData(ip net.IP, data []byte, node int) (interface{}, error) {
@@ -168,10 +185,16 @@ func (g *GeoIP) resultToRecord(val interface{}) (*Record, error) {
 	return newRecord(val)
 }
 
+// New parses the given database as an io.ReadSeeker and returns a new
+// GeoIP. If the database does not have the correct format, an error
+// will be returned. See also Open.
 func New(r io.ReadSeeker) (*GeoIP, error) {
 	return newGeoIP(r)
 }
 
+// Open initializes a GeoIP from the database named filename. Note that
+// if the database file has the .gz extension (e.g. GeoLite2-City.mmdb.gz),
+// it will be automatically decompressed in memory before loading it.
 func Open(filename string) (*GeoIP, error) {
 	f, err := os.Open(filename)
 	if err != nil {
