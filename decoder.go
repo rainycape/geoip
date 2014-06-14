@@ -207,7 +207,6 @@ func (d *decoder) decode() (interface{}, error) {
 		d.at += size
 		if size <= 8 {
 			return decodeUint64(cur, size), nil
-			break
 		}
 		return decodeUint128(cur, size), nil
 	case typeArray:
