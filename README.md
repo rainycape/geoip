@@ -6,6 +6,22 @@ GeoIP2 library in Go (golang)
 This library implements reading and decoding of GeoIP2 databases. Free
 databases can be downloaded from [MaxMind][1]. 
 
+To install geoip run the following command:
+
+```
+    go get gopkgs.com/geoip.v1
+```
+
+Then use the following import path to ensure a stable API:
+
+```go
+    import "gopkgs.com/geoip.v1"
+```
+
+For documentation and available versions,
+see http://gopkgs.com/geoip.
+
+
 ## Example
 
 ```go
@@ -13,7 +29,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/rainycape/geoip"
+	"gopkgs.com/geoip.v1"
 )
 
 func main() {
