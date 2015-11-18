@@ -1,6 +1,8 @@
 geoip
 =====
 
+[![GoDoc](https://godoc.org/github.com/rainycape/geoip?status.svg)](https://godoc.org/github.com/rainycape/geoip)
+
 GeoIP2 library in Go (golang)
 
 This library implements reading and decoding of GeoIP2 databases. Free
@@ -9,18 +11,8 @@ databases can be downloaded from [MaxMind][1].
 To install geoip run the following command:
 
 ```
-    go get gopkgs.com/geoip.v1
+    go get github.com/rainycape/geoip
 ```
-
-Then use the following import path to ensure a stable API:
-
-```go
-    import "gopkgs.com/geoip.v1"
-```
-
-For documentation and available versions,
-see http://gopkgs.com/geoip.
-
 
 ## Example
 
@@ -29,7 +21,7 @@ package main
 
 import (
 	"fmt"
-	"gopkgs.com/geoip.v1"
+	"github.com/rainycape/vfs"
 )
 
 func main() {
