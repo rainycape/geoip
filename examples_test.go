@@ -7,7 +7,7 @@ import (
 )
 
 func ExampleOpen() {
-	db, err := geoip.Open("GeoLite2-City.mmdb.gz")
+	db, err := geoip.OpenGeoLite(geoip.GeoLiteKindCity)
 	if err != nil {
 		panic(err)
 	}
