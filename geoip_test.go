@@ -85,6 +85,12 @@ func normalize(val interface{}) interface{} {
 					v, _ = strconv.ParseFloat(s, 64)
 				}
 			}
+			// This keys are strings in the control JSON, we want them as an int
+			if k == "geoname_id" || k == "metro_code" {
+				if s, ok := v.(string); ok {
+					v, _ = strconv.Atoi(s)
+				}
+			}
 			m[k] = normalize(v)
 		}
 		return m
@@ -105,6 +111,7 @@ func normalize(val interface{}) interface{} {
 			return int(1)
 		}
 		return int(0)
+	case int:
 	default:
 		panic(fmt.Sprintf("can't normalize %T", val))
 	}
