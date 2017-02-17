@@ -130,10 +130,8 @@ func testLookups(t testing.TB, g *GeoIP, lookups map[string]interface{}) {
 			continue
 		}
 		res := normalize(val)
-		s1 := fmt.Sprintf("%v", v)
-		s2 := fmt.Sprintf("%v", res)
-		if s1 != s2 {
-			t.Errorf("expecting %v for ip %q, got %v instead", s1, k, s2)
+		if !deepEqual(t, v, res) {
+			t.Errorf("expecting %v for ip %q, got %v instead", v, k, res)
 		}
 	}
 }
