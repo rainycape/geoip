@@ -2,7 +2,8 @@ package geoip_test
 
 import (
 	"fmt"
-	"geoip"
+
+	"github.com/rainycape/geoip"
 )
 
 func ExampleOpen() {
