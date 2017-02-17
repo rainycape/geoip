@@ -211,8 +211,16 @@ func deepEqual(t testing.TB, a interface{}, b interface{}) bool {
 		if aok && bok {
 			for k, v := range ma {
 				vb := mb[k]
-				if !reflect.DeepEqual(v, vb) {
-					t.Logf("key %q differs: %v and %v", k, v, vb)
+				if !deepEqual(t, v, vb) {
+					jv, err := json.MarshalIndent(v, "\t", " ")
+					if err != nil {
+						panic(err)
+					}
+					jvb, err := json.MarshalIndent(vb, "\t", " ")
+					if err != nil {
+						panic(err)
+					}
+					t.Errorf("key %q differs: %v and %v", k, string(jv), string(jvb))
 				}
 			}
 		}
