@@ -21,7 +21,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/rainycape/vfs"
+
+	"github.com/rainycape/geoip"
 )
 
 func main() {
