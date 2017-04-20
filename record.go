@@ -118,7 +118,6 @@ func (r *Record) CountryCode() string {
 
 func newPlace(val interface{}) *Place {
 	if m, ok := val.(map[string]interface{}); ok {
-		geonameId := int(m["geoname_id"].(uint32))
 		var code string
 		for _, v := range codes {
 			if c, ok := m[v].(string); ok {
@@ -133,6 +132,12 @@ func newPlace(val interface{}) *Place {
 				if n, ok := v.(string); ok {
 					name[k] = n
 				}
+			}
+		}
+		var geonameId int
+		if nameId, ok := m["geoname_id"]; ok {
+			if nameId != nil {
+				geonameId = int(nameId.(uint32))
 			}
 		}
 		return &Place{
